@@ -1,10 +1,10 @@
-# backend/chat/views.py
 from rest_framework import generics, permissions, status
 from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.pagination import LimitOffsetPagination
+from rest_framework.parsers import MultiPartParser, FormParser, JSONParser
 
-from .models import Conversation, Message
+from .models import Conversation, Message, MessageAttachment
 from .serializers import (
     ConversationSerializer,
     ConversationCreateSerializer,
@@ -28,7 +28,12 @@ class ConversationListCreateView(generics.ListCreateAPIView):
     pagination_class = DefaultLimitOffsetPagination
 
     def get_queryset(self):
-        return Conversation.objects.filter(members=self.request.user).distinct().order_by("-created_at")
+        return (
+            Conversation.objects
+            .filter(members=self.request.user)
+            .distinct()
+            .order_by("-created_at")
+        )
 
     def get_serializer_class(self):
         return ConversationCreateSerializer if self.request.method == "POST" else ConversationSerializer
@@ -37,6 +42,7 @@ class ConversationListCreateView(generics.ListCreateAPIView):
         ctx = super().get_serializer_context()
         ctx["request"] = self.request
         return ctx
+
 
 class MessageListView(generics.ListAPIView):
     """
@@ -50,7 +56,7 @@ class MessageListView(generics.ListAPIView):
     def get_queryset(self):
         conv_id = self.kwargs["conversation_id"]
 
-        # اطمینان از عضویت کاربر
+        # اجازه فقط به اعضا
         if not Conversation.objects.filter(id=conv_id, members=self.request.user).exists():
             return Message.objects.none()
 
@@ -63,7 +69,7 @@ class MessageListView(generics.ListAPIView):
             except (ValueError, TypeError):
                 pass
 
-        # اختیاری: limit دستی (در کنار pagination)
+        # اختیاری: limit دستی (کنار pagination)
         limit = self.request.query_params.get("limit")
         if limit:
             try:
@@ -73,20 +79,42 @@ class MessageListView(generics.ListAPIView):
 
         return qs
 
+
 class MessageSendView(APIView):
     """
-    POST: ارسال پیام
-    بدنه: { "conversation_id": <int>, "text": "<string>" }
+    POST: ارسال پیام متنی + آپلود فایل (تکی/چندتا)
+    بدنه JSON یا فرم/مالتی‌پارت:
+      - conversation_id (الزامی)
+      - text (اختیاری)
+      - file=... (اختیاری، تکی)
+      - files=... (اختیاری، چندتا)
     """
     permission_classes = [IsAuthenticated]
+    parser_classes = [MultiPartParser, FormParser, JSONParser]
 
     def post(self, request):
         serializer = MessageCreateSerializer(data=request.data, context={"request": request})
         serializer.is_valid(raise_exception=True)
+
         msg = Message.objects.create(
             conversation=serializer.validated_data["conversation"],
             sender=serializer.validated_data["sender"],
-            text=serializer.validated_data["text"],
+            text=serializer.validated_data.get("text", "") or "",
         )
-        return Response(MessageSerializer(msg).data, status=status.HTTP_201_CREATED)
 
+        # فایل‌ها
+        files = []
+        files += request.FILES.getlist("file")
+        files += request.FILES.getlist("files")
+
+        for f in files:
+            MessageAttachment.objects.create(
+                message=msg,
+                file=f,
+                content_type=getattr(f, "content_type", "") or "",
+                size=getattr(f, "size", 0) or 0,
+            )
+
+        # مهم: حتماً request رو به serializer پاس بده تا URLهای فایل‌ها درست ساخته بشن
+        data = MessageSerializer(msg, context={"request": request}).data
+        return Response(data, status=status.HTTP_201_CREATED)
