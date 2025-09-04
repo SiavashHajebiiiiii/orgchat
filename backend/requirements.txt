@@ -1,0 +1,8 @@
+django
+djangorestframework
+channels
+channels-redis
+daphne
+psycopg2-binary
+whitenoise
+python-dotenv

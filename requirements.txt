@@ -1,0 +1,13 @@
+django
+djangorestframework
+channels
+channels-redis
+daphne
+psycopg2-binary
+whitenoise
+python-dotenv
+Django>=5.0
+djangorestframework
+psycopg2-binary
+dj-database-url
+Pillow>=10
